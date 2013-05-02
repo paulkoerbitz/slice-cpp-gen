@@ -73,9 +73,9 @@ sliceCppGen icefile trgtdir decl = go [] decl
     genMethodHeads indent mthds = fromString indent <> BS.intercalate (";\n" <> fromString indent) (map (genMethodHead "") mthds) <> ";\n"
     
     genMethodHead :: BS.ByteString -> MethodDecl -> BS.ByteString
-    genMethodHead scope (MethodDecl tp nm flds _) = genType tp <> " " <> scope <> fromString nm <> "(" <> genFields flds <> (if null flds then "" else ", ") <> "const Ice::Current& current)"
+    genMethodHead scope (MethodDecl tp nm flds _ _) = genType tp <> " " <> scope <> fromString nm <> "(" <> genFields flds <> (if null flds then "" else ", ") <> "const Ice::Current& current)"
     
-    genField (FieldDecl tp nm) = passRefOrVal tp <> " " <> fromString nm
+    genField (FieldDecl tp nm _) = passRefOrVal tp <> " " <> fromString nm
     
     genFields flds = BS.intercalate ", " $ map genField flds
     
