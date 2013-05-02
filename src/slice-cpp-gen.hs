@@ -102,11 +102,15 @@ main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw) -> do
   createDirectoryIfMissing True trgtD
   case SlcP.parseSlice slcData of
     Left  err -> putStrLn (err ++ "\nexiting...") >> exitFailure
+    Right []  -> putStrLn ("Parsing '" ++ icef ++ "' didn't produce any output, probably because the Slice parser is deficient.\nTo improve it, please report your slice file to paul.koerbitz@gmail.com") 
+                 >> exitFailure 
     Right ast -> do
       let fileData = concatMap (sliceCppGen icef trgtD) ast
           wrtr     = if ovrw 
                      then uncurry BL.writeFile 
                      else \(fn,ctnt) -> do p <- doesFileExist fn
-                                           putStrLn $ '\'' : fn ++ "' aready exists. To overwrite use --overwrite=True"
-                                           if p then return () else (BL.writeFile fn ctnt)
+                                           if p 
+                                             then putStrLn ('\'' : fn ++ "' aready exists. To overwrite use '--overwrite=True'")
+                                             else do putStrLn $ "generating '" ++ fn ++ "'"
+                                                     (BL.writeFile fn ctnt)
       mapM_ wrtr fileData
