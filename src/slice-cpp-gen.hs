@@ -106,11 +106,12 @@ main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw) -> do
                  >> exitFailure 
     Right ast -> do
       let fileData = concatMap (sliceCppGen icef trgtD) ast
-          wrtr     = if ovrw 
-                     then uncurry BL.writeFile 
-                     else \(fn,ctnt) -> do p <- doesFileExist fn
-                                           if p 
-                                             then putStrLn ('\'' : fn ++ "' aready exists. To overwrite use '--overwrite=True'")
-                                             else do putStrLn $ "generating '" ++ fn ++ "'"
-                                                     (BL.writeFile fn ctnt)
-      mapM_ wrtr fileData
+          wrtr     = \(fn,ctnt) -> do putStrLn $ "generating '" ++ fn ++ "'"
+                                      (BL.writeFile fn ctnt)
+          chkwrtr  = if ovrw 
+                       then wrtr
+                       else \(fn,ctnt) -> do p <- doesFileExist fn
+                                             if p 
+                                               then putStrLn ('\'' : fn ++ "' aready exists. To overwrite use '--overwrite=True'")
+                                               else wrtr (fn,ctnt)
+      mapM_ chkwrtr fileData
