@@ -1,5 +1,7 @@
 ## C++ code skeleton generator from Slice files
 
+[![Build Status](https://travis-ci.org/paulkoerbitz/slice-cpp-gen.png)](https://travis-ci.org/paulkoerbitz/slice-cpp-gen)
+
 This module generates simple C++ skeletons based on parsing a slice file.
 It relies on [language-slice](https://github.com/paulkoerbitz/language-slice).
 
