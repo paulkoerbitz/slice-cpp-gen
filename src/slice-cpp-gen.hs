@@ -3,7 +3,7 @@ module Main (main) where
 
 import           Data.Monoid ((<>),mempty,mconcat)
 import qualified Data.ByteString as BS
-import           Data.Char (toUpper)
+import           Data.Char (toUpper,isUpper)
 import           Data.List (intercalate)
 import           Data.String (fromString)
 import qualified System.Console.CmdArgs as CA
@@ -18,34 +18,43 @@ data CppGenArgs = CppGenArgs { icefile   :: FilePath
                              , targetDir :: FilePath
                              , overwrite :: Bool
                              , cpp98     :: Bool
+                             , longguard :: Bool
                              } deriving (Show, CA.Data, CA.Typeable)
                                 
 defaultArgs = CppGenArgs { icefile   = CA.def CA.&= CA.args CA.&= CA.typ "INPUTFILE"
                          , targetDir = ""
                          , overwrite = False
                          , cpp98     = False
+                         , longguard = False
                          }
 
+camelSplit :: String -> [String]
+camelSplit s = let (wrd,lst) = foldl (\(wrd,lst) c -> if isUpper c 
+                                                      then ([c],if null wrd then lst else reverse wrd:lst) 
+                                                      else (c:wrd,lst)) ([],[]) s
+               in reverse (reverse wrd:lst)
+
 -- generate cpp skeletons
-sliceCppGen :: FilePath -> FilePath -> Bool -> AST.SliceDecl -> [(FilePath,BS.ByteString)]
-sliceCppGen icefile trgtdir cpp98 decl = go [] decl
+sliceCppGen :: CppGenArgs -> AST.SliceDecl -> [(FilePath,BS.ByteString)]
+sliceCppGen args decl = go [] decl
   where
-    override = if cpp98 then "" else " override"
+    override = if cpp98 args then "" else " override"
     go ns (ModuleDecl mName decls)     = concatMap (go (ns++[mName])) decls
-    go ns (InterfaceDecl nm ext mthds) = [ (trgtdir </> nm ++ "I.h",   genH   ns nm mthds)
-                                         , (trgtdir </> nm ++ "I.cpp", genCpp ns nm mthds)]
+    go ns (InterfaceDecl nm ext mthds) = [ (targetDir args </> nm ++ "I.h",   genH   ns nm mthds)
+                                         , (targetDir args </> nm ++ "I.cpp", genCpp ns nm mthds)]
     go ns _                            = []
     
     genH :: [String] -> String -> [MethodDecl] -> BS.ByteString
-    genH   ns nm mthds = let hname = replaceExtension (takeFileName icefile) ".h"
-                             classCont = \indent -> genClass indent nm mthds
-                             ctnt      =  genInclds [hname] <> genNs "" ns classCont
-                         in genIfDef (ns ++ [nm]) ctnt
+    genH   ns nm mthds = let hname = replaceExtension (takeFileName $ icefile args) ".h"
+                             classCont  = \indent -> genClass indent nm mthds
+                             ctnt       =  genInclds [hname] <> genNs "" ns classCont
+                             guardItems = if longguard args then ns ++ [nm] else [nm]
+                         in genIfDef guardItems ctnt
     
     genCpp ns nm mthds = let mthdsCont = \indent -> genMethods indent nm mthds
-                         in genInclds [trgtdir </> nm ++ "I.h"] <> genNs "" ns mthdsCont
-    
-    genIfDef tkns ctnt = let ident = fromString $ intercalate "_" $ map (map toUpper) tkns ++ ["H"]
+                         in genInclds [targetDir args </> nm ++ "I.h"] <> genNs "" ns mthdsCont
+                            
+    genIfDef tkns ctnt = let ident = fromString $ intercalate "_" $ map (map toUpper) (concatMap camelSplit tkns) ++ ["I","H"]
                          in ("#ifndef " <> ident <>"\n#define " <> ident <> "\n\n") <> ctnt <> "\n#endif"
                             
     genInclds xs = mconcat (map (\x -> "#include <" <> fromString x <> ">\n") xs) <> "\n"
@@ -95,7 +104,7 @@ sliceCppGen icefile trgtdir cpp98 decl = go [] decl
     passRefOrVal tp                   = genType tp
 
 
-main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw cpp98') -> do
+main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw _ _) -> do
   slcData <- BS.readFile icef
   createDirectoryIfMissing True trgtD
   case SlcP.parseSlice slcData of
@@ -103,7 +112,7 @@ main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw cpp98') -> d
     Right []  -> putStrLn ("Parsing '" ++ icef ++ "' didn't produce any output, probably because the Slice parser is deficient.\nTo improve it, please report your slice file to paul.koerbitz@gmail.com") 
                  >> exitFailure 
     Right ast -> do
-      let fileData = concatMap (sliceCppGen icef trgtD cpp98') ast
+      let fileData = concatMap (sliceCppGen args) ast
           wrtr     = \(fn,ctnt) -> do putStrLn $ "generating '" ++ fn ++ "'"
                                       (BS.writeFile fn ctnt)
           chkwrtr  = if ovrw 
