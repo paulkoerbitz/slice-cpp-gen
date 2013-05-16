@@ -17,17 +17,20 @@ import           Language.Slice.Syntax.AST    as AST
 data CppGenArgs = CppGenArgs { icefile   :: FilePath
                              , targetDir :: FilePath
                              , overwrite :: Bool
+                             , cpp98     :: Bool
                              } deriving (Show, CA.Data, CA.Typeable)
                                 
 defaultArgs = CppGenArgs { icefile   = CA.def CA.&= CA.args CA.&= CA.typ "INPUTFILE"
                          , targetDir = ""
                          , overwrite = False
+                         , cpp98     = False
                          }
 
 -- generate cpp skeletons
-sliceCppGen :: FilePath -> FilePath -> AST.SliceDecl -> [(FilePath,BS.ByteString)]
-sliceCppGen icefile trgtdir decl = go [] decl
+sliceCppGen :: FilePath -> FilePath -> Bool -> AST.SliceDecl -> [(FilePath,BS.ByteString)]
+sliceCppGen icefile trgtdir cpp98 decl = go [] decl
   where
+    override = if cpp98 then "" else " override"
     go ns (ModuleDecl mName decls)     = concatMap (go (ns++[mName])) decls
     go ns (InterfaceDecl nm ext mthds) = [ (trgtdir </> nm ++ "I.h",   genH   ns nm mthds)
                                          , (trgtdir </> nm ++ "I.cpp", genCpp ns nm mthds)]
@@ -65,7 +68,7 @@ sliceCppGen icefile trgtdir decl = go [] decl
                                     BS.intercalate ("\n" <> indent' <> "{\n" <> indent' <> "}\n\n" <> indent') (map (genMethodHead (nm' <> "I::")) mthds) 
                                     <> "\n" <> indent' <> "{\n" <> indent' <> "}\n"
     
-    genMethodHeads indent mthds = fromString indent <> BS.intercalate (";\n" <> fromString indent) (map (genMethodHead "") mthds) <> ";\n"
+    genMethodHeads indent mthds = fromString indent <> BS.intercalate (override <> ";\n" <> fromString indent) (map (genMethodHead "") mthds) <> override <> ";\n"
     
     genMethodHead :: BS.ByteString -> MethodDecl -> BS.ByteString
     genMethodHead scope (MethodDecl tp nm flds _ _) = genType tp <> " " <> scope <> fromString nm <> "(" <> genFields flds <> (if null flds then "" else ", ") <> "const Ice::Current& current)"
@@ -92,7 +95,7 @@ sliceCppGen icefile trgtdir decl = go [] decl
     passRefOrVal tp                   = genType tp
 
 
-main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw) -> do
+main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw cpp98') -> do
   slcData <- BS.readFile icef
   createDirectoryIfMissing True trgtD
   case SlcP.parseSlice slcData of
@@ -100,7 +103,7 @@ main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw) -> do
     Right []  -> putStrLn ("Parsing '" ++ icef ++ "' didn't produce any output, probably because the Slice parser is deficient.\nTo improve it, please report your slice file to paul.koerbitz@gmail.com") 
                  >> exitFailure 
     Right ast -> do
-      let fileData = concatMap (sliceCppGen icef trgtD) ast
+      let fileData = concatMap (sliceCppGen icef trgtD cpp98') ast
           wrtr     = \(fn,ctnt) -> do putStrLn $ "generating '" ++ fn ++ "'"
                                       (BS.writeFile fn ctnt)
           chkwrtr  = if ovrw 
