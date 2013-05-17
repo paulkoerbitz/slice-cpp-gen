@@ -19,5 +19,6 @@ executable slice-cpp-gen
                        cmdargs >= 0.9,
                        directory >= 1.1,
                        filepath >= 1.2,
+                       containers >= 0.4,
                        language-slice >= 0.2.1
   hs-source-dirs:      src

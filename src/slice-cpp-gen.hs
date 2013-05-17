@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings, DeriveDataTypeable, ScopedTypeVariables #-}
 module Main (main) where
 
+import qualified Data.Map as Map
 import           Data.Monoid ((<>),mempty,mconcat)
 import qualified Data.ByteString as BS
 import           Data.Char (toUpper,isUpper)
@@ -34,7 +35,18 @@ camelSplit s = let (wrd,lst) = foldl (\(wrd,lst) c -> if isUpper c
                                                       else (c:wrd,lst)) ([],[]) s
                in reverse (reverse wrd:lst)
 
--- generate cpp skeletons
+findIfcsWFactory :: AST.SliceDecl -> Map.Map [String] AST.SliceDecl
+findIfcsWFactory ast = Map.foldlWithKey (\acc k v -> if pred k then Map.insert k v acc else acc) Map.empty interfaces
+  where
+    findI :: [String] -> AST.SliceDecl -> Map.Map [String] AST.SliceDecl
+    findI ns (ModuleDecl nm decls)    = Map.unions $ map (findI (nm:ns)) decls
+    findI ns i@(InterfaceDecl nm _ _) = Map.singleton (nm:ns) i
+    findI _  _                        = Map.empty
+
+    interfaces = findI [] ast
+    
+    pred k   = let k' = (head k ++ "Factory") : tail k in Map.member k' interfaces
+
 sliceCppGen :: CppGenArgs -> AST.SliceDecl -> [(FilePath,BS.ByteString)]
 sliceCppGen args decl = go [] decl
   where
