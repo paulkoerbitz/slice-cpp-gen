@@ -2,11 +2,13 @@
 module Main (main) where
 
 import qualified Data.Map as Map
+import           Data.Maybe (fromMaybe)
 import           Data.Monoid ((<>),mempty,mconcat)
 import qualified Data.ByteString as BS
 import           Data.Char (toUpper,isUpper)
 import           Data.List (intercalate)
 import           Data.String (fromString)
+import           Data.String.Utils (endswith)
 import qualified System.Console.CmdArgs as CA
 import           System.Directory (doesFileExist, createDirectoryIfMissing)
 import           System.Exit (exitSuccess, exitFailure)
@@ -20,6 +22,7 @@ data CppGenArgs = CppGenArgs { icefile   :: FilePath
                              , overwrite :: Bool
                              , cpp98     :: Bool
                              , longguard :: Bool
+                             , fwdFctMthds :: Bool
                              } deriving (Show, CA.Data, CA.Typeable)
                                 
 defaultArgs = CppGenArgs { icefile   = CA.def CA.&= CA.args CA.&= CA.typ "INPUTFILE"
@@ -27,6 +30,7 @@ defaultArgs = CppGenArgs { icefile   = CA.def CA.&= CA.args CA.&= CA.typ "INPUTF
                          , overwrite = False
                          , cpp98     = False
                          , longguard = False
+                         , fwdFctMthds = True
                          }
 
 camelSplit :: String -> [String]
@@ -36,7 +40,7 @@ camelSplit s = let (wrd,lst) = foldl (\(wrd,lst) c -> if isUpper c
                in reverse (reverse wrd:lst)
 
 findIfcsWFactory :: AST.SliceDecl -> Map.Map [String] AST.SliceDecl
-findIfcsWFactory ast = Map.foldlWithKey (\acc k v -> if pred k then Map.insert k v acc else acc) Map.empty interfaces
+findIfcsWFactory ast = Map.foldlWithKey (\acc k v -> if pred k then Map.insert (reverse k) v acc else acc) Map.empty interfaces
   where
     findI :: [String] -> AST.SliceDecl -> Map.Map [String] AST.SliceDecl
     findI ns (ModuleDecl nm decls)    = Map.unions $ map (findI (nm:ns)) decls
@@ -46,25 +50,60 @@ findIfcsWFactory ast = Map.foldlWithKey (\acc k v -> if pred k then Map.insert k
     interfaces = findI [] ast
     
     pred k   = let k' = (head k ++ "Factory") : tail k in Map.member k' interfaces
-
-sliceCppGen :: CppGenArgs -> AST.SliceDecl -> [(FilePath,BS.ByteString)]
-sliceCppGen args decl = go [] decl
+    
+findFctyMthds :: [SliceDecl] -> Map.Map [String] [MethodDecl]
+findFctyMthds asts = mapMaybeReverseKey (\k v -> mFctyMthds k) interfaces
   where
-    override = if cpp98 args then "" else " override"
+    findI :: [String] -> AST.SliceDecl -> Map.Map [String] AST.SliceDecl
+    findI ns (ModuleDecl nm decls)    = Map.unions $ map (findI (nm:ns)) decls
+    findI ns i@(InterfaceDecl nm _ _) = Map.singleton (nm:ns) i
+    findI _  _                        = Map.empty
+
+    interfaces = Map.unions . map (findI []) $ asts
+    
+    isFcty k = endswith "Factory" (head k) && Map.member (replaceTail "Factory" "" (head k) : tail k) interfaces
+    
+    mFctyMthds k = if isFcty k 
+                   then Map.lookup k interfaces >>= \(InterfaceDecl _ _ mthds) -> Just mthds
+                   else Nothing
+                                              
+    mapMaybeReverseKey :: ([String] -> a -> Maybe b) -> Map.Map [String] a -> Map.Map [String] b 
+    mapMaybeReverseKey f m = go Map.empty (Map.toList m)
+      where
+        go acc []         = acc
+        go acc ((k,v):xs) = case f k v of (Just x) -> go (Map.insert (reverse k) x acc) xs
+                                          Nothing  -> go acc xs
+    
+replaceTail :: String -> String -> String -> String
+replaceTail what with target = let n              = length what
+                                   m              = length target - n
+                                   (thead, ttail) = splitAt m target
+                               in if ttail == what then thead ++ with else target
+    
+sliceCppGen :: Map.Map [String] [MethodDecl] -> CppGenArgs -> SliceDecl -> [(FilePath,BS.ByteString)]
+sliceCppGen fctyMthds args decl = go [] decl
+  where
+    -- 
     go ns (ModuleDecl mName decls)     = concatMap (go (ns++[mName])) decls
     go ns (InterfaceDecl nm ext mthds) = [ (targetDir args </> nm ++ "I.h",   genH   ns nm mthds)
                                          , (targetDir args </> nm ++ "I.cpp", genCpp ns nm mthds)]
     go ns _                            = []
     
     genH :: [String] -> String -> [MethodDecl] -> BS.ByteString
-    genH   ns nm mthds = let hname = replaceExtension (takeFileName $ icefile args) ".h"
-                             classCont  = \indent -> genClass indent nm mthds
-                             ctnt       =  genInclds [hname] <> genNs "" ns classCont
-                             guardItems = if longguard args then ns ++ [nm] else [nm]
-                         in genIfDef guardItems ctnt
+    genH ns nm mthds = let staticMthds = fromMaybe [] $ Map.lookup (ns ++ [nm++"Factory"]) fctyMthds
+                           -- fwdMthds    = fromMaybe [] $ Map.lookup (ns++[nm]) fctyMthds
+                           hnames      = [replaceExtension (takeFileName $ icefile args) ".h"]
+                           classCont   = \indent -> genClass indent nm mthds staticMthds
+                           ctnt        =  genInclds hnames <> genNs "" ns classCont
+                           guardItems  = if longguard args then ns ++ [nm] else [nm]
+                       in genIfDef guardItems ctnt
     
-    genCpp ns nm mthds = let mthdsCont = \indent -> genMethods indent nm mthds
-                         in genInclds [targetDir args </> nm ++ "I.h"] <> genNs "" ns mthdsCont
+    genCpp ns nm mthds = let fwdMthds    = fromMaybe [] $ Map.lookup (ns++[nm]) fctyMthds
+                             staticMthds = fromMaybe [] $ Map.lookup (ns ++ [nm++"Factory"]) fctyMthds
+                             mthdsCont   = \indent -> genMethods indent nm (mthds ++ staticMthds) fwdMthds
+                             hnames      = (targetDir args </> nm ++ "I.h")
+                                           : if null fwdMthds then [] else [targetDir args </> replaceTail "Factory" "" nm ++ "I.h"]
+                         in genInclds hnames <> genNs "" ns mthdsCont
                             
     genIfDef tkns ctnt = let ident = fromString $ intercalate "_" $ map (map toUpper) (concatMap camelSplit tkns) ++ ["I","H"]
                          in ("#ifndef " <> ident <>"\n#define " <> ident <> "\n\n") <> ctnt <> "\n#endif"
@@ -73,26 +112,41 @@ sliceCppGen args decl = go [] decl
     
     genNs :: String -> [String] -> (String -> BS.ByteString) -> BS.ByteString
     genNs indent (ns:nss) cont = let indent' = fromString indent 
-                                 in (indent' <> "namespace " <> fromString ns <> "\n" <> indent' <> "{\n") 
-                                    <> genNs ('\t':indent) nss cont <> (indent' <> "};\n")
+                                 in indent' <> "namespace " <> fromString ns <> "\n" <> indent' <> "{\n"
+                                    <> genNs ('\t':indent) nss cont <> indent' <> "};\n"
     genNs indent []       cont = cont indent
     
-    genClass :: String -> String -> [MethodDecl] -> BS.ByteString
-    genClass indent nm  mthds = let indent' = fromString indent
-                                    nm'     = fromString nm
-                                in (indent' <> "class " <> nm' <> "I: public " <> nm' <> "\n" <> indent' <> "{\n" <> indent'<> "public:\n") 
-                                   <> genMethodHeads ('\t':indent) mthds <> (indent' <> "};\n")
+    genClass :: String -> String -> [MethodDecl] -> [MethodDecl] -> BS.ByteString
+    genClass indent nm  mthds staticMthds = let indent'  = fromString indent
+                                                nm'      = fromString nm
+                                                override = if cpp98 args then "" else " override"
+                                            in indent' <> "class " <> nm' <> "I: public " <> nm' <> "\n" <> indent' <> "{\n" <> indent'<> "public:\n" 
+                                               <> genMethodHeads override ('\t':indent) mthds  <> (if null staticMthds then "" else "\n")
+                                               <> genMethodHeads "" ('\t':indent ++ "static ") staticMthds
+                                               <> indent' <> "};\n"
+                                                                                                                                              
                                    
-    genMethods indent nm mthds = let indent' = fromString indent
-                                     nm'     = fromString nm
-                                 in indent' <> 
-                                    BS.intercalate ("\n" <> indent' <> "{\n" <> indent' <> "}\n\n" <> indent') (map (genMethodHead (nm' <> "I::")) mthds) 
-                                    <> "\n" <> indent' <> "{\n" <> indent' <> "}\n"
+    genMethods indent nm mthds fwdMthds = let indent'  = fromString indent
+                                              nm'      = fromString nm
+                                              bodyStub = "\n" <> indent' <> "{\n" <> indent' <> "}\n\n" <> indent'
+                                          in indent' <> 
+                                             BS.intercalate bodyStub (map (genMethodHead (nm' <> "I::")) mthds) 
+                                             <> "\n" <> indent' <> "{\n" <> indent' <> "}\n" <> if null fwdMthds then "" else "\n"
+                                             <> BS.intercalate "\n" (map (genFwdMethod indent' nm) fwdMthds)
     
-    genMethodHeads indent mthds = fromString indent <> BS.intercalate (override <> ";\n" <> fromString indent) (map (genMethodHead "") mthds) <> override <> ";\n"
+    genMethodHeads override indent mthds = fromString indent <> BS.intercalate (override <> ";\n" <> fromString indent) (map (genMethodHead "") mthds) <> override <> ";\n"
     
     genMethodHead :: BS.ByteString -> MethodDecl -> BS.ByteString
     genMethodHead scope (MethodDecl tp nm flds _ _) = genType tp <> " " <> scope <> fromString nm <> "(" <> genFields flds <> (if null flds then "" else ", ") <> "const Ice::Current& current)"
+    
+    fs = fromString
+    
+    genFwdMethod indent scope mdecl@(MethodDecl tp nm flds _ _) = 
+      let scope' = fs $ replaceTail "Factory" "" scope
+          vals   = map (\(FieldDecl _ fnm _) -> fs fnm) flds ++ ["current"]
+          ret    = if tp == STVoid then "" else "return "
+      in indent <> genMethodHead (fs scope <> "I::") mdecl <> "\n" <> indent <> "{\n" <> indent <> "\t" <>
+         ret <> scope' <> "I::" <> fs nm <> "(" <> BS.intercalate ", " vals <> ");\n" <> indent <> "}\n"
     
     genField (FieldDecl tp nm _) = passRefOrVal tp <> " " <> fromString nm
     
@@ -116,15 +170,16 @@ sliceCppGen args decl = go [] decl
     passRefOrVal tp                   = genType tp
 
 
-main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw _ _) -> do
+main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw _ _ _) -> do
   slcData <- BS.readFile icef
   createDirectoryIfMissing True trgtD
   case SlcP.parseSlice slcData of
     Left  err -> putStrLn (err ++ "\nexiting...") >> exitFailure
     Right []  -> putStrLn ("Parsing '" ++ icef ++ "' didn't produce any output, probably because the Slice parser is deficient.\nTo improve it, please report your slice file to paul.koerbitz@gmail.com") 
                  >> exitFailure 
-    Right ast -> do
-      let fileData = concatMap (sliceCppGen args) ast
+    Right asts -> do
+      let fctyMthds = if fwdFctMthds args then findFctyMthds asts else Map.empty
+          fileData = concatMap (sliceCppGen fctyMthds args) asts
           wrtr     = \(fn,ctnt) -> do putStrLn $ "generating '" ++ fn ++ "'"
                                       (BS.writeFile fn ctnt)
           chkwrtr  = if ovrw 

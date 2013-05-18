@@ -20,5 +20,6 @@ executable slice-cpp-gen
                        directory >= 1.1,
                        filepath >= 1.2,
                        containers >= 0.4,
+                       MissingH >= 1.1.1,
                        language-slice >= 0.2.1
   hs-source-dirs:      src
