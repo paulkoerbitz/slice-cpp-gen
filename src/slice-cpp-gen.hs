@@ -114,18 +114,19 @@ sliceCppGen fctyMthds args decl = go [] decl
                                                 nm'      = fromString nm
                                                 override = if cpp98 args then "" else " override"
                                             in indent' <> "class " <> nm' <> "I: public " <> nm' <> "\n" <> indent' <> "{\n" <> indent'<> "public:\n" 
-                                               <> genMethodHeads override ('\t':indent) mthds  <> (if null staticMthds then "" else "\n")
-                                               <> genMethodHeads "" ('\t':indent ++ "static ") staticMthds
+                                               <> genMethodHeads override ('\t':indent) mthds  
+                                               <> (if null staticMthds then "" 
+                                                   else "\n" <> genMethodHeads "" ('\t':indent ++ "static ") staticMthds)
                                                <> indent' <> "};\n"
                                                                                                                                               
                                    
     genMethods indent nm mthds fwdMthds = let indent'  = fromString indent
                                               nm'      = fromString nm
                                               bodyStub = "\n" <> indent' <> "{\n" <> indent' <> "}\n\n" <> indent'
-                                          in indent' <> 
-                                             BS.intercalate bodyStub (map (genMethodHead (nm' <> "I::")) mthds) 
-                                             <> "\n" <> indent' <> "{\n" <> indent' <> "}\n" <> if null fwdMthds then "" else "\n"
-                                             <> BS.intercalate "\n" (map (genFwdMethod indent' nm) fwdMthds)
+                                          in if null fwdMthds
+                                             then indent' <> (BS.intercalate bodyStub (map (genMethodHead (nm' <> "I::")) mthds) 
+                                                   <> "\n" <> indent' <> "{\n" <> indent' <> "}\n") 
+                                             else BS.intercalate "\n" (map (genFwdMethod indent' nm) fwdMthds)
     
     genMethodHeads override indent mthds = fromString indent <> BS.intercalate (override <> ";\n" <> fromString indent) (map (genMethodHead "") mthds) <> override <> ";\n"
     
