@@ -39,27 +39,28 @@ camelSplit s = let (wrd,lst) = foldl (\(wrd,lst) c -> if isUpper c
                                                       else (c:wrd,lst)) ([],[]) s
                in reverse (reverse wrd:lst)
 
+replaceTail :: String -> String -> String -> String
+replaceTail what with target = let n              = length what
+                                   m              = length target - n
+                                   (thead, ttail) = splitAt m target
+                               in if ttail == what then thead ++ with else target
+    
+-- namespaces and names are in reverse order (e.g ["InterfaceName", "InnerNamespace", "OuterNamespace"])
+findInterfaces :: [String] -> AST.SliceDecl -> Map.Map [String] AST.SliceDecl
+findInterfaces ns (ModuleDecl nm decls)    = Map.unions $ map (findInterfaces (nm:ns)) decls
+findInterfaces ns i@(InterfaceDecl nm _ _) = Map.singleton (nm:ns) i
+findInterfaces _  _                        = Map.empty
+
 findIfcsWFactory :: AST.SliceDecl -> Map.Map [String] AST.SliceDecl
 findIfcsWFactory ast = Map.foldlWithKey (\acc k v -> if pred k then Map.insert (reverse k) v acc else acc) Map.empty interfaces
   where
-    findI :: [String] -> AST.SliceDecl -> Map.Map [String] AST.SliceDecl
-    findI ns (ModuleDecl nm decls)    = Map.unions $ map (findI (nm:ns)) decls
-    findI ns i@(InterfaceDecl nm _ _) = Map.singleton (nm:ns) i
-    findI _  _                        = Map.empty
-
-    interfaces = findI [] ast
-    
+    interfaces = findInterfaces [] ast
     pred k   = let k' = (head k ++ "Factory") : tail k in Map.member k' interfaces
     
 findFctyMthds :: [SliceDecl] -> Map.Map [String] [MethodDecl]
 findFctyMthds asts = mapMaybeReverseKey (\k v -> mFctyMthds k) interfaces
   where
-    findI :: [String] -> AST.SliceDecl -> Map.Map [String] AST.SliceDecl
-    findI ns (ModuleDecl nm decls)    = Map.unions $ map (findI (nm:ns)) decls
-    findI ns i@(InterfaceDecl nm _ _) = Map.singleton (nm:ns) i
-    findI _  _                        = Map.empty
-
-    interfaces = Map.unions . map (findI []) $ asts
+    interfaces = Map.unions . map (findInterfaces []) $ asts
     
     isFcty k = endswith "Factory" (head k) && Map.member (replaceTail "Factory" "" (head k) : tail k) interfaces
     
@@ -74,16 +75,9 @@ findFctyMthds asts = mapMaybeReverseKey (\k v -> mFctyMthds k) interfaces
         go acc ((k,v):xs) = case f k v of (Just x) -> go (Map.insert (reverse k) x acc) xs
                                           Nothing  -> go acc xs
     
-replaceTail :: String -> String -> String -> String
-replaceTail what with target = let n              = length what
-                                   m              = length target - n
-                                   (thead, ttail) = splitAt m target
-                               in if ttail == what then thead ++ with else target
-    
 sliceCppGen :: Map.Map [String] [MethodDecl] -> CppGenArgs -> SliceDecl -> [(FilePath,BS.ByteString)]
 sliceCppGen fctyMthds args decl = go [] decl
   where
-    -- 
     go ns (ModuleDecl mName decls)     = concatMap (go (ns++[mName])) decls
     go ns (InterfaceDecl nm ext mthds) = [ (targetDir args </> nm ++ "I.h",   genH   ns nm mthds)
                                          , (targetDir args </> nm ++ "I.cpp", genCpp ns nm mthds)]
@@ -91,7 +85,6 @@ sliceCppGen fctyMthds args decl = go [] decl
     
     genH :: [String] -> String -> [MethodDecl] -> BS.ByteString
     genH ns nm mthds = let staticMthds = fromMaybe [] $ Map.lookup (ns ++ [nm++"Factory"]) fctyMthds
-                           -- fwdMthds    = fromMaybe [] $ Map.lookup (ns++[nm]) fctyMthds
                            hnames      = [replaceExtension (takeFileName $ icefile args) ".h"]
                            classCont   = \indent -> genClass indent nm mthds staticMthds
                            ctnt        =  genInclds hnames <> genNs "" ns classCont
