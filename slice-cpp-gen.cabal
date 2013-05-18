@@ -1,5 +1,5 @@
 name:                slice-cpp-gen
-version:             0.2.2.0
+version:             0.2.3.0
 synopsis:            Generate C++ skeletons from slice files
 description:         Generate C++ skeletons from slice files
 homepage:            https://github.com/paulkoerbitz/slice-cpp-gen
