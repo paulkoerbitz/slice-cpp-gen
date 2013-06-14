@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings, DeriveDataTypeable, ScopedTypeVariables #-}
 module Main (main) where
 
+import           Data.List (intercalate)
 import qualified Data.Map as Map
 import           Data.Maybe (fromMaybe)
 import           Data.Monoid ((<>),mempty,mconcat)
@@ -47,9 +48,9 @@ replaceTail what with target = let n              = length what
     
 -- namespaces and names are in reverse order (e.g ["InterfaceName", "InnerNamespace", "OuterNamespace"])
 findInterfaces :: [String] -> AST.SliceDecl -> Map.Map [String] AST.SliceDecl
-findInterfaces ns (ModuleDecl nm decls)    = Map.unions $ map (findInterfaces (nm:ns)) decls
-findInterfaces ns i@(InterfaceDecl nm _ _) = Map.singleton (nm:ns) i
-findInterfaces _  _                        = Map.empty
+findInterfaces ns (ModuleDecl (Ident nm) decls)    = Map.unions $ map (findInterfaces (nm:ns)) decls
+findInterfaces ns i@(InterfaceDecl (Ident nm) _ _) = Map.singleton (nm:ns) i
+findInterfaces _  _                                = Map.empty
 
 findIfcsWFactory :: AST.SliceDecl -> Map.Map [String] AST.SliceDecl
 findIfcsWFactory ast = Map.foldlWithKey (\acc k v -> if pred k then Map.insert (reverse k) v acc else acc) Map.empty interfaces
@@ -78,10 +79,10 @@ findFctyMthds asts = mapMaybeReverseKey (\k v -> mFctyMthds k) interfaces
 sliceCppGen :: Map.Map [String] [MethodDecl] -> CppGenArgs -> SliceDecl -> [(FilePath,BS.ByteString)]
 sliceCppGen fctyMthds args decl = go [] decl
   where
-    go ns (ModuleDecl mName decls)     = concatMap (go (ns++[mName])) decls
-    go ns (InterfaceDecl nm ext mthds) = [ (targetDir args </> nm ++ "I.h",   genH   ns nm mthds)
-                                         , (targetDir args </> nm ++ "I.cpp", genCpp ns nm mthds)]
-    go ns _                            = []
+    go ns (ModuleDecl (Ident mName) decls)     = concatMap (go (ns++[mName])) decls
+    go ns (InterfaceDecl (Ident nm) ext mthds) = [ (targetDir args </> nm ++ "I.h",   genH   ns nm mthds)
+                                                 , (targetDir args </> nm ++ "I.cpp", genCpp ns nm mthds)]
+    go ns _                                    = []
     
     genH :: [String] -> String -> [MethodDecl] -> BS.ByteString
     genH ns nm mthds = let staticMthds = fromMaybe [] $ Map.lookup (ns ++ [nm++"Factory"]) fctyMthds
@@ -131,33 +132,33 @@ sliceCppGen fctyMthds args decl = go [] decl
     genMethodHeads override indent mthds = fromString indent <> BS.intercalate (override <> ";\n" <> fromString indent) (map (genMethodHead "") mthds) <> override <> ";\n"
     
     genMethodHead :: BS.ByteString -> MethodDecl -> BS.ByteString
-    genMethodHead scope (MethodDecl tp nm flds _ _) = genType tp <> " " <> scope <> fromString nm <> "(" <> genFields flds <> (if null flds then "" else ", ") <> "const Ice::Current& current)"
+    genMethodHead scope (MethodDecl tp (Ident nm) flds _ _) = genType tp <> " " <> scope <> fromString nm <> "(" <> genFields flds <> (if null flds then "" else ", ") <> "const Ice::Current& current)"
     
     fs = fromString
     
-    genFwdMethod indent scope mdecl@(MethodDecl tp nm flds _ _) = 
+    genFwdMethod indent scope mdecl@(MethodDecl tp (Ident nm) flds _ _) = 
       let scope' = fs $ replaceTail "Factory" "" scope
-          vals   = map (\(FieldDecl _ fnm _) -> fs fnm) flds ++ ["current"]
+          vals   = map (\(FieldDecl _ (Ident fnm) _) -> fs fnm) flds ++ ["current"]
           ret    = if tp == STVoid then "" else "return "
       in indent <> genMethodHead (fs scope <> "I::") mdecl <> "\n" <> indent <> "{\n" <> indent <> "\t" <>
          ret <> scope' <> "I::" <> fs nm <> "(" <> BS.intercalate ", " vals <> ");\n" <> indent <> "}\n"
     
-    genField (FieldDecl tp nm _) = passRefOrVal tp <> " " <> fromString nm
+    genField (FieldDecl tp (Ident nm) _) = passRefOrVal tp <> " " <> fromString nm
     
     genFields flds = BS.intercalate ", " $ map genField flds
     
     genType :: SliceType -> BS.ByteString
-    genType STVoid                = "void"
-    genType STBool                = "bool"
-    genType STByte                = "Ice::Byte"
-    genType STShort               = "Ice::Short"
-    genType STInt                 = "Ice::Int"
-    genType STLong                = "Ice::Long"
-    genType STFloat               = "float"
-    genType STDouble              = "double"
-    genType STString              = "std::string"
-    genType (STUserDefined nm)    = fromString nm
-    genType (STUserDefinedPrx nm) = fromString nm <> "Prx"
+    genType STVoid                                 = "void"
+    genType STBool                                 = "bool"
+    genType STByte                                 = "Ice::Byte"
+    genType STShort                                = "Ice::Short"
+    genType STInt                                  = "Ice::Int"
+    genType STLong                                 = "Ice::Long"
+    genType STFloat                                = "float"
+    genType STDouble                               = "double"
+    genType STString                               = "std::string"
+    genType (STUserDefined (NsQualIdent nm ns))    = fromString (intercalate "::" (ns ++ [nm]))
+    genType (STUserDefinedPrx (NsQualIdent nm ns)) = fromString (intercalate "::" (ns ++ [nm])) <> "Prx"
     
     passRefOrVal tp@(STString)        = "const " <> genType tp <> "&"
     passRefOrVal tp@(STUserDefined _) = "const " <> genType tp <> "&"
@@ -165,10 +166,10 @@ sliceCppGen fctyMthds args decl = go [] decl
 
 
 main = CA.cmdArgs defaultArgs >>= \args@(CppGenArgs icef trgtD ovrw _ _ _) -> do
-  slcData <- BS.readFile icef
+  parseResult <- SlcP.parseFile icef
   createDirectoryIfMissing True trgtD
-  case SlcP.parseSlice slcData of
-    Left  err -> putStrLn (err ++ "\nexiting...") >> exitFailure
+  case parseResult of
+    Left  err -> putStrLn (show err) >> exitFailure
     Right []  -> putStrLn ("Parsing '" ++ icef ++ "' didn't produce any output, probably because the Slice parser is deficient.\nTo improve it, please report your slice file to paul.koerbitz@gmail.com") 
                  >> exitFailure 
     Right asts -> do
