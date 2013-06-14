@@ -12,8 +12,10 @@ It relies on [language-slice](https://github.com/paulkoerbitz/language-slice).
 
 use '--overwrite=True' to overwrite existing files.
 
-
 ## Todo
-- Option 'fwd-factory-methods': If both 'interface XyzFactory' and 'interface Xyz'
+- Improve help message and options when run from command line
+
+## Done
+- Option '--fwdfctmthds': If both 'interface XyzFactory' and 'interface Xyz'
   exist then give XyzI static methods with the same name as those in XyzFactory
   and call these from XyzFactoryI.
